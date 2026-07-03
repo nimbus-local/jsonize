@@ -181,6 +181,16 @@ class TestStdin(unittest.TestCase):
         self.assertEqual(out, "")
 
 
+class TestHelp(unittest.TestCase):
+    def test_help_flag(self):
+        for flag in ("-h", "--help"):
+            code, out, _ = run([flag], stdin="")
+            self.assertEqual(code, 0)
+            self.assertIn("usage: jsonize", out)
+            self.assertIn("key=value", out)
+            self.assertIn("Per-word type coercion", out)
+
+
 class TestPrettyPrint(unittest.TestCase):
     def test_pretty_output(self):
         code, out, _ = run(["-p", "a=1"], stdin="")

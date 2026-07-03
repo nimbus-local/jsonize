@@ -25,11 +25,20 @@ $ jsonize tst=1457081292 lat=12.3456 name="JP Mens" nada=
 ```
 
 `key@value` builds a boolean (truthy if the value starts with `T`/`t`, or is
-a number greater than zero):
+a number greater than zero); `key@` with no value produces `null`, the same
+as `key=`:
 
 ```bash
 $ jsonize switch=true morning@0
 {"switch":true,"morning":false}
+```
+
+With no words on the command line, words are read from stdin — in object
+mode as well as array mode:
+
+```bash
+$ printf 'a=1\nb=2\n' | jsonize
+{"a":1,"b":2}
 ```
 
 ### Array mode
@@ -60,6 +69,13 @@ $ jsonize -p name=Jane 'point[]=1' 'point[]=2' 'geo[lat]=10' 'geo[lon]=20'
 }
 ```
 
+Brackets nest to any depth:
+
+```bash
+$ jsonize 'a[b][c]=1'
+{"a":{"b":{"c":1}}}
+```
+
 `-d <delim>` lets you use a delimiter (e.g. a dot) instead of brackets for
 object paths:
 
@@ -86,14 +102,23 @@ $ jsonize -- -s a=true b=true -n c="a string"
 {"a":"true","b":true,"c":8}
 ```
 
+The coercion rules: `-s` renders the value as a string (`true` → `"true"`,
+`12` → `"12"`). `-n` converts numeric strings to numbers and turns any
+other string into its *length* (hence `c:8` above); `true`/`false` become
+`1`/`0`. `-b` yields `false` for the empty string, `0`, and `null`, and
+`true` for everything else.
+
 ### Reading/writing values from files
 
 ```bash
 jsonize content=@path/to/file      # inline raw file contents
 jsonize content=%path/to/file      # base64-encode file contents
 jsonize nested=:path/to/file.json  # parse file contents as JSON
-jsonize key:=path/to/file.json     # same, at the key level (works with -f too)
+jsonize key:=path/to/file.json     # same, at the key level
 ```
+
+In all of these, `-` can be used in place of a file name to read from
+stdin (e.g. `ls | jsonize -a > files.json; jsonize files:=- < files.json`).
 
 Prefix the special characters `@`, `%`, `:` with a backslash to treat them
 as literal characters instead.
@@ -113,6 +138,7 @@ jsonize -f - newkey=value               # read existing JSON from stdin instead
 - `-n` skip keys whose value is empty, instead of emitting `null`
 - `-e` produce no output at all when stdin is empty (instead of `{}` / `[]`)
 - `-v` / `-V` print version (plain / as JSON)
+- `-h` / `--help` full built-in reference
 
 ## Install
 

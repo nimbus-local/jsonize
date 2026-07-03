@@ -268,6 +268,58 @@ class Options:
 
 USAGE = "usage: jsonize [-apBDen] [-d keydelim] [-f file] [--] [[-s|-n|-b] word ...]"
 
+HELP = USAGE + """
+
+Build a JSON object (default) or array (-a) from words given as arguments,
+or read from stdin when no words are given.
+
+Words:
+  key=value       object member; value is type-guessed: numbers, true/false/
+                  null are recognized, anything else is a string. An empty
+                  value produces null. A value that parses as JSON (object or
+                  array) is embedded as-is.
+  key@value       boolean member: true if value starts with T/t or is a
+                  number greater than zero, else false; null if value absent
+  key:=file       parse file as JSON and assign it to key ("-" reads stdin)
+
+Key paths:
+  k[sub]=v        nested object: {"k":{"sub":v}}; brackets nest arbitrarily
+  k[]=v           append v to the array named k
+  -d <delim>      treat <delim> in keys as a path separator, e.g.
+                  -d. a.b=1 -> {"a":{"b":1}}
+
+Values (first character is special; escape with a backslash to keep literal):
+  @file           inline the raw contents of file
+  %file           inline the contents of file, base64-encoded
+  :file           parse the contents of file as JSON and embed the result
+
+Options:
+  -a              array mode: words are values, output is a JSON array
+  -p              pretty-print output (default is compact)
+  -B              treat "true", "false", "null" as plain strings
+  -D              deduplicate object keys (last value wins)
+  -e              print nothing at all when stdin is empty
+  -n              skip members whose value is empty instead of emitting null
+  -f file         load file as existing JSON, apply words as edits ("-" reads
+                  stdin)
+  -d keydelim     key path delimiter (see above)
+  -v, -V          print version (plain / as a JSON object)
+  -h, --help      show this help
+  --              end of global options; required before per-word coercion
+
+Per-word type coercion (after --):
+  -s word         force the value to a string
+  -n word         force a number: numeric strings convert, other strings
+                  become their length, true/false become 1/0
+  -b word         force a boolean: false for empty string/0/null, else true
+
+Examples:
+  jsonize name=Jane 'point[]=1' 'point[]=2' 'geo[lat]=10'
+  seq 1 5 | jsonize -a
+  jsonize -p outer="$(jsonize inner=1)"
+  jsonize -f existing.json newkey=value
+"""
+
 NO_ARG_FLAGS = {
     "-a": "array",
     "-p": "pretty",
@@ -286,6 +338,9 @@ def parse_argv(argv):
         if tok == "--":
             i += 1
             break
+        if tok in ("-h", "--help"):
+            print(HELP)
+            sys.exit(0)
         if tok == "-v":
             print(f"jsonize {VERSION}")
             sys.exit(0)
