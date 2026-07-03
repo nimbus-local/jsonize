@@ -140,6 +140,25 @@ jsonize -f - newkey=value               # read existing JSON from stdin instead
 - `-v` / `-V` print version (plain / as JSON)
 - `-h` / `--help` full built-in reference
 
+## Reading values back out
+
+jsonize only builds JSON — it deliberately has no query mode. For reading
+values back out, pair it with [`jq`](https://jqlang.org/) (preinstalled on
+modern macOS, one package install away elsewhere):
+
+```bash
+$ jsonize -b foo=1 bar=hello | jq -r .bar
+hello
+```
+
+Where `jq` isn't available, the Python standard library covers simple
+lookups with no extra dependencies:
+
+```bash
+$ jsonize -b foo=1 bar=hello | python3 -c 'import json,sys; print(json.load(sys.stdin)["bar"])'
+hello
+```
+
 ## Install
 
 Two dependency-free options:
