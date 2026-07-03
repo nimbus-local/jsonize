@@ -39,6 +39,10 @@ class TestObjectMode(unittest.TestCase):
         code, out, _ = run(["switch=true", "morning@0", "coffee@T"], stdin="")
         self.assertEqual(json.loads(out), {"switch": True, "morning": False, "coffee": True})
 
+    def test_boolean_shorthand_empty_value_is_null(self):
+        code, out, _ = run(["x@"], stdin="")
+        self.assertEqual(json.loads(out), {"x": None})
+
     def test_no_literals_flag(self):
         code, out, _ = run(["-B", "switch=true", "morning@0"], stdin="")
         self.assertEqual(json.loads(out), {"switch": "true", "morning": False})
@@ -164,6 +168,17 @@ class TestStdin(unittest.TestCase):
     def test_empty_stdin_object(self):
         code, out, err = run([], stdin="")
         self.assertEqual(out, "{}")
+        self.assertEqual(err, "")
+
+    def test_empty_stdin_with_e_prints_nothing(self):
+        code, out, _ = run(["-e"], stdin="")
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "")
+
+    def test_empty_stdin_array_with_e_prints_nothing(self):
+        code, out, _ = run(["-a", "-e"], stdin="")
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "")
 
 
 class TestPrettyPrint(unittest.TestCase):

@@ -365,7 +365,8 @@ def build(opts, words):
         if op == ":=":
             value = wrap(json.loads(read_file_text(rhs)))
         elif op == "@":
-            value = bool_shorthand(rhs)
+            # an absent value means null, same as key= with no value
+            value = None if rhs == "" else bool_shorthand(rhs)
         else:
             if opts.no_empty and rhs == "":
                 continue
@@ -383,8 +384,9 @@ def main(argv):
         opts, words = parse_argv(argv)
         if not words and opts.infile != "-":
             words = read_words_from_stdin()
-            if not words and not opts.ignore_empty_stdin and not sys.stdin.isatty():
-                print("jsonize: warning: empty stdin", file=sys.stderr)
+            # with -e, empty stdin produces no output at all rather than {} / []
+            if not words and opts.ignore_empty_stdin:
+                return 0
         root = build(opts, words)
         print(dumps(root, opts.pretty))
     except JsonizeError as e:

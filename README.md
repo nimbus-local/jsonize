@@ -111,7 +111,7 @@ jsonize -f - newkey=value               # read existing JSON from stdin instead
 - `-B` disable `true`/`false`/`null` literal recognition (treat as strings)
 - `-D` deduplicate object keys (last value wins); default keeps duplicates
 - `-n` skip keys whose value is empty, instead of emitting `null`
-- `-e` suppress the warning when stdin is empty
+- `-e` produce no output at all when stdin is empty (instead of `{}` / `[]`)
 - `-v` / `-V` print version (plain / as JSON)
 
 ## Install
