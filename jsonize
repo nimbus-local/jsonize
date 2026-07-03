@@ -1,0 +1,400 @@
+#!/usr/bin/env python3
+import sys
+
+if sys.version_info < (3, 14):
+    sys.stderr.write(
+        "jsonize: Python 3.14+ is required (running %d.%d)\n" % sys.version_info[:2]
+    )
+    sys.exit(1)
+
+import base64
+import json
+import re
+
+VERSION = "0.1.0"
+
+NUM_RE = re.compile(r"^[+-]?(\d+\.\d*|\.\d+|\d+)([eE][+-]?\d+)?$")
+PATH_RE = re.compile(r"^([^\[\]]*)((?:\[[^\]]*\])*)$")
+BRACKET_RE = re.compile(r"\[([^\]]*)\]")
+
+
+class JsonizeError(Exception):
+    pass
+
+
+class Obj:
+    """Ordered object that (like jsonize's own model) allows duplicate keys."""
+
+    def __init__(self, pairs=None):
+        self.pairs = pairs if pairs is not None else []
+
+    def get_container(self, key, kind):
+        want_type = Obj if kind == "dict" else list
+        for k, v in self.pairs:
+            if k == key and isinstance(v, want_type):
+                return v
+        new_container = Obj() if kind == "dict" else []
+        self.pairs.append((key, new_container))
+        return new_container
+
+    def set(self, key, value, dedupe):
+        if dedupe:
+            for i, (k, _) in enumerate(self.pairs):
+                if k == key:
+                    self.pairs[i] = (key, value)
+                    return
+        self.pairs.append((key, value))
+
+
+def wrap(v):
+    if isinstance(v, dict):
+        return Obj([(k, wrap(val)) for k, val in v.items()])
+    if isinstance(v, list):
+        return [wrap(x) for x in v]
+    return v
+
+
+def try_number(raw):
+    if not NUM_RE.match(raw):
+        return None
+    if "." in raw or "e" in raw or "E" in raw:
+        return float(raw)
+    return int(raw)
+
+
+def format_number(n):
+    if isinstance(n, int):
+        return str(n)
+    if n.is_integer() and abs(n) < 1e16:
+        return str(int(n))
+    return repr(n)
+
+
+def dumps(v, pretty, level=0):
+    if v is None:
+        return "null"
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return format_number(v)
+    if isinstance(v, str):
+        return json.dumps(v)
+    if isinstance(v, list):
+        return _dumps_seq(v, pretty, level, "[", "]", lambda x: dumps(x, pretty, level + 1))
+    if isinstance(v, Obj):
+        return _dumps_seq(
+            v.pairs,
+            pretty,
+            level,
+            "{",
+            "}",
+            lambda pair: json.dumps(pair[0]) + (": " if pretty else ":") + dumps(pair[1], pretty, level + 1),
+        )
+    raise JsonizeError(f"cannot serialize value of type {type(v).__name__}")
+
+
+def _dumps_seq(items, pretty, level, open_ch, close_ch, render):
+    if not items:
+        return open_ch + close_ch
+    if not pretty:
+        return open_ch + ",".join(render(x) for x in items) + close_ch
+    indent = "  " * (level + 1)
+    body = (",\n" + indent).join(render(x) for x in items)
+    return open_ch + "\n" + indent + body + "\n" + "  " * level + close_ch
+
+
+def read_file_text(fname):
+    if fname == "-":
+        return sys.stdin.read()
+    with open(fname, "r") as f:
+        return f.read()
+
+
+def read_file_bytes(fname):
+    if fname == "-":
+        return sys.stdin.buffer.read()
+    with open(fname, "rb") as f:
+        return f.read()
+
+
+def strip_one_trailing_newline(s):
+    if s.endswith("\r\n"):
+        return s[:-2]
+    if s.endswith("\n"):
+        return s[:-1]
+    return s
+
+
+def guess_value(raw, disable_literals):
+    if raw == "":
+        return None
+    if len(raw) >= 2 and raw[0] == "\\" and raw[1] in "@%:":
+        return raw[1:]
+    op = raw[0]
+    if op == "@":
+        return strip_one_trailing_newline(read_file_text(raw[1:]))
+    if op == "%":
+        return base64.b64encode(read_file_bytes(raw[1:])).decode("ascii")
+    if op == ":":
+        return wrap(json.loads(read_file_text(raw[1:])))
+    if op in "{[":
+        try:
+            return wrap(json.loads(raw))
+        except ValueError:
+            pass
+    n = try_number(raw)
+    if n is not None:
+        return n
+    if not disable_literals:
+        if raw == "true":
+            return True
+        if raw == "false":
+            return False
+        if raw == "null":
+            return None
+    return raw
+
+
+def bool_shorthand(raw):
+    if raw == "":
+        return False
+    if raw[0] in "Tt":
+        return True
+    n = try_number(raw)
+    return n is not None and n > 0
+
+
+def to_string(v):
+    if v is None:
+        return ""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return format_number(v)
+    if isinstance(v, str):
+        return v
+    return dumps(v, False)
+
+
+def to_number(v):
+    if v is None:
+        return 0
+    if isinstance(v, bool):
+        return 1 if v else 0
+    if isinstance(v, (int, float)):
+        return v
+    if isinstance(v, str):
+        n = try_number(v)
+        return n if n is not None else len(v)
+    return len(dumps(v, False))
+
+
+def to_bool(v):
+    if v is None:
+        return False
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v != 0
+    if isinstance(v, str):
+        return v != ""
+    return True
+
+
+OVERRIDES = {"s": to_string, "n": to_number, "b": to_bool}
+
+
+def parse_path(key_part, keydelim):
+    m = PATH_RE.match(key_part)
+    if not m:
+        raise JsonizeError(f"invalid key path: {key_part!r}")
+    base, brackets = m.group(1), m.group(2)
+    segments = base.split(keydelim) if keydelim else [base]
+    for bm in BRACKET_RE.finditer(brackets):
+        inner = bm.group(1)
+        segments.append(inner if inner != "" else None)
+    return segments
+
+
+def apply_path(root, segments, value, dedupe):
+    container = root
+    for i in range(len(segments) - 1):
+        seg = segments[i]
+        if seg is None:
+            raise JsonizeError("cannot nest a key path inside an array-append segment ([])")
+        if not isinstance(container, Obj):
+            raise JsonizeError(f"path conflict at {seg!r}: expected an object here")
+        kind_needed = "list" if segments[i + 1] is None else "dict"
+        container = container.get_container(seg, kind_needed)
+    last = segments[-1]
+    if last is None:
+        if not isinstance(container, list):
+            raise JsonizeError("path conflict: expected an array here")
+        container.append(value)
+    else:
+        if not isinstance(container, Obj):
+            raise JsonizeError(f"path conflict at {last!r}: expected an object here")
+        container.set(last, value, dedupe)
+
+
+def find_operator(word):
+    candidates = []
+    idx = word.find(":=")
+    if idx != -1:
+        candidates.append((idx, ":="))
+    idx = word.find("@")
+    if idx != -1:
+        candidates.append((idx, "@"))
+    idx = word.find("=")
+    if idx != -1:
+        candidates.append((idx, "="))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda c: c[0])
+    return candidates[0]
+
+
+class Options:
+    def __init__(self):
+        self.array = False
+        self.pretty = False
+        self.no_literals = False
+        self.dedupe = False
+        self.ignore_empty_stdin = False
+        self.no_empty = False
+        self.keydelim = None
+        self.infile = None
+
+
+USAGE = "usage: jsonize [-apBDen] [-d keydelim] [-f file] [--] [[-s|-n|-b] word ...]"
+
+NO_ARG_FLAGS = {
+    "-a": "array",
+    "-p": "pretty",
+    "-B": "no_literals",
+    "-D": "dedupe",
+    "-e": "ignore_empty_stdin",
+    "-n": "no_empty",
+}
+
+
+def parse_argv(argv):
+    opts = Options()
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok == "--":
+            i += 1
+            break
+        if tok == "-v":
+            print(f"jsonize {VERSION}")
+            sys.exit(0)
+        if tok == "-V":
+            print(json.dumps({"name": "jsonize", "version": VERSION}))
+            sys.exit(0)
+        if tok in NO_ARG_FLAGS:
+            setattr(opts, NO_ARG_FLAGS[tok], True)
+            i += 1
+            continue
+        if tok == "-d" or (tok.startswith("-d") and len(tok) > 2):
+            if tok == "-d":
+                i += 1
+                if i >= len(argv):
+                    raise JsonizeError("-d requires an argument")
+                delim = argv[i]
+            else:
+                delim = tok[2:]
+            opts.keydelim = delim[0] if delim else "."
+            i += 1
+            continue
+        if tok == "-f" or (tok.startswith("-f") and len(tok) > 2):
+            if tok == "-f":
+                i += 1
+                if i >= len(argv):
+                    raise JsonizeError("-f requires an argument")
+                opts.infile = argv[i]
+            else:
+                opts.infile = tok[2:]
+            i += 1
+            continue
+        if tok.startswith("-") and tok not in ("-", "-s", "-n", "-b"):
+            raise JsonizeError(f"unknown option: {tok}\n{USAGE}")
+        break
+    words = []
+    while i < len(argv):
+        tok = argv[i]
+        if tok in ("-s", "-n", "-b") and i + 1 < len(argv):
+            words.append((argv[i + 1], tok[1]))
+            i += 2
+        else:
+            words.append((tok, None))
+            i += 1
+    return opts, words
+
+
+def read_words_from_stdin():
+    if sys.stdin.isatty():
+        return []
+    text = sys.stdin.read()
+    return [(t, None) for t in text.split()]
+
+
+def build(opts, words):
+    if opts.infile:
+        text = sys.stdin.read() if opts.infile == "-" else read_file_text(opts.infile)
+        root = wrap(json.loads(text))
+    else:
+        root = [] if opts.array else Obj()
+
+    for raw_word, override in words:
+        if isinstance(root, list):
+            value = guess_value(raw_word, opts.no_literals)
+            if override:
+                value = OVERRIDES[override](value)
+            root.append(value)
+            continue
+
+        found = find_operator(raw_word)
+        if found is None:
+            raise JsonizeError(f"invalid word: {raw_word!r} (expected key=value, key@value, or key:=file)")
+        idx, op = found
+        key_part = raw_word[:idx]
+        rhs = raw_word[idx + (2 if op == ":=" else 1):]
+        segments = parse_path(key_part, opts.keydelim)
+
+        if op == ":=":
+            value = wrap(json.loads(read_file_text(rhs)))
+        elif op == "@":
+            value = bool_shorthand(rhs)
+        else:
+            if opts.no_empty and rhs == "":
+                continue
+            value = guess_value(rhs, opts.no_literals)
+            if override:
+                value = OVERRIDES[override](value)
+
+        apply_path(root, segments, value, opts.dedupe)
+
+    return root
+
+
+def main(argv):
+    try:
+        opts, words = parse_argv(argv)
+        if not words and opts.infile != "-":
+            words = read_words_from_stdin()
+            if not words and not opts.ignore_empty_stdin and not sys.stdin.isatty():
+                print("jsonize: warning: empty stdin", file=sys.stderr)
+        root = build(opts, words)
+        print(dumps(root, opts.pretty))
+    except JsonizeError as e:
+        print(f"jsonize: {e}", file=sys.stderr)
+        return 1
+    except (OSError, ValueError) as e:
+        print(f"jsonize: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

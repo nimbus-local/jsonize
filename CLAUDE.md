@@ -5,6 +5,8 @@
 A single-file Python 3 CLI that turns shell arguments into JSON. `jsonize
 key=value ...` produces a JSON object; an array mode produces a JSON array
 from bare values. No dependencies beyond the Python 3 standard library.
+Requires Python 3.14+ (enforced by a version guard at the top of the script
+and `requires-python` in pyproject.toml — keep the two in sync).
 
 ## Dependency policy
 
